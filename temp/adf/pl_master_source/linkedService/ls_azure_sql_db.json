@@ -1,0 +1,26 @@
+{
+    "name": "sql_metadata_db",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "AzureSqlDatabase",
+        "typeProperties": {
+            "connectionString": {
+                "type": "AzureKeyVaultSecret",
+                "store": {
+                    "referenceName": "kv_edl",
+                    "type": "LinkedServiceReference"
+                },
+                "secretName": "sql-metadata-connection-string"
+            },
+            "credential": {
+                "referenceName": "cred_managed_identity",
+                "type": "CredentialReference"
+            }
+        },
+        "connectVia": {
+            "referenceName": "ir_self_hosted",
+            "type": "IntegrationRuntimeReference"
+        },
+        "annotations": []
+    }
+}

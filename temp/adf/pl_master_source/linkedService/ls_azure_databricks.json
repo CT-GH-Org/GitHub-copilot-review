@@ -1,0 +1,17 @@
+{
+    "name": "databricks_edl",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "AzureDatabricks",
+        "typeProperties": {
+            "domain": "[parameters('databricksDomain')]",
+            "credential": {
+                "referenceName": "cred_managed_identity",
+                "type": "CredentialReference"
+            },
+            "workspaceResourceId": "[parameters('databricksWorkspaceResourceId')]",
+            "existingClusterId": "[parameters('databricksClusterId')]"
+        },
+        "annotations": []
+    }
+}

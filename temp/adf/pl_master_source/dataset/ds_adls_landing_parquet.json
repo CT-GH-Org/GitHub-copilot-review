@@ -1,0 +1,41 @@
+{
+    "name": "ds_adls_landing_parquet",
+    "type": "Microsoft.DataFactory/factories/datasets",
+    "properties": {
+        "linkedServiceName": {
+            "referenceName": "adls_landing",
+            "type": "LinkedServiceReference"
+        },
+        "parameters": {
+            "container_name": {
+                "type": "string"
+            },
+            "folder_path": {
+                "type": "string"
+            },
+            "file_name": {
+                "type": "string"
+            }
+        },
+        "type": "Parquet",
+        "typeProperties": {
+            "location": {
+                "type": "AzureBlobFSLocation",
+                "fileName": {
+                    "value": "@dataset().file_name",
+                    "type": "Expression"
+                },
+                "folderPath": {
+                    "value": "@dataset().folder_path",
+                    "type": "Expression"
+                },
+                "fileSystem": {
+                    "value": "@dataset().container_name",
+                    "type": "Expression"
+                }
+            },
+            "compressionCodec": "snappy"
+        },
+        "annotations": []
+    }
+}

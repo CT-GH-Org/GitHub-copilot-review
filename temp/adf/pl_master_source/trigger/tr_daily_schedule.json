@@ -1,0 +1,35 @@
+{
+    "name": "tr_daily_schedule",
+    "type": "Microsoft.DataFactory/factories/triggers",
+    "properties": {
+        "type": "ScheduleTrigger",
+        "description": "Daily trigger for master pipeline execution",
+        "typeProperties": {
+            "recurrence": {
+                "frequency": "Day",
+                "interval": 1,
+                "startTime": "2024-01-01T06:00:00",
+                "timeZone": "UTC",
+                "schedule": {
+                    "hours": [6],
+                    "minutes": [0]
+                }
+            }
+        },
+        "pipelines": [
+            {
+                "pipelineReference": {
+                    "referenceName": "pl_master_source",
+                    "type": "PipelineReference"
+                },
+                "parameters": {
+                    "source_name": "erp_sales"
+                }
+            }
+        ],
+        "annotations": [
+            "daily",
+            "erp_sales"
+        ]
+    }
+}

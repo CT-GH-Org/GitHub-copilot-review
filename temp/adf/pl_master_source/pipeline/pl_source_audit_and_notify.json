@@ -1,0 +1,154 @@
+{
+    "name": "pl_source_audit_and_notify",
+    "properties": {
+        "description": "Shared audit logging and summary notification pipeline. Called by master pipeline after all processing completes.",
+        "activities": [
+            {
+                "name": "Log Pipeline Audit",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:05:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[control].[usp_log_pipeline_audit]",
+                    "storedProcedureParameters": {
+                        "pipeline_name": {
+                            "value": {
+                                "value": "@pipeline().parameters.parent_pipeline_name",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "pipeline_run_id": {
+                            "value": {
+                                "value": "@pipeline().parameters.parent_pipeline_run_id",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "source_name": {
+                            "value": {
+                                "value": "@pipeline().parameters.source_name",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "total_rows": {
+                            "value": {
+                                "value": "@pipeline().parameters.total_rows_processed",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "duration_seconds": {
+                            "value": {
+                                "value": "@pipeline().parameters.duration_seconds",
+                                "type": "Expression"
+                            },
+                            "type": "Int32"
+                        },
+                        "status": {
+                            "value": {
+                                "value": "@pipeline().parameters.overall_status",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        }
+                    }
+                },
+                "linkedServiceName": {
+                    "referenceName": "sql_metadata_db",
+                    "type": "LinkedServiceReference"
+                }
+            },
+            {
+                "name": "Send Summary Notification",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "Log Pipeline Audit",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:05:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "url": {
+                        "value": "@pipeline().globalParameters.notification_url",
+                        "type": "Expression"
+                    },
+                    "method": "POST",
+                    "headers": {
+                        "Content-Type": "application/json"
+                    },
+                    "body": {
+                        "to": {
+                            "value": "@pipeline().parameters.notification_email",
+                            "type": "Expression"
+                        },
+                        "subject": {
+                            "value": "Pipeline Summary - @{pipeline().parameters.source_name} - @{pipeline().parameters.overall_status}",
+                            "type": "Expression"
+                        },
+                        "body": {
+                            "value": "Pipeline: @{pipeline().parameters.parent_pipeline_name}\nRun ID: @{pipeline().parameters.parent_pipeline_run_id}\nSource: @{pipeline().parameters.source_name}\nRows Processed: @{pipeline().parameters.total_rows_processed}\nDuration: @{pipeline().parameters.duration_seconds}s\nStatus: @{pipeline().parameters.overall_status}",
+                            "type": "Expression"
+                        }
+                    },
+                    "authentication": {
+                        "type": "MSI",
+                        "resource": "https://management.azure.com/"
+                    }
+                }
+            }
+        ],
+        "parameters": {
+            "parent_pipeline_name": {
+                "type": "string"
+            },
+            "parent_pipeline_run_id": {
+                "type": "string"
+            },
+            "source_name": {
+                "type": "string"
+            },
+            "total_rows_processed": {
+                "type": "int",
+                "defaultValue": 0
+            },
+            "duration_seconds": {
+                "type": "int",
+                "defaultValue": 0
+            },
+            "overall_status": {
+                "type": "string",
+                "defaultValue": "Unknown"
+            },
+            "notification_email": {
+                "type": "string",
+                "defaultValue": "data-ops@contoso.com"
+            }
+        },
+        "annotations": [
+            "audit",
+            "notification",
+            "shared"
+        ],
+        "folder": {
+            "name": "ingestion/shared"
+        }
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}

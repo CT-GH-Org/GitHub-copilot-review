@@ -1,0 +1,29 @@
+{
+    "name": "http_api_source",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "HttpServer",
+        "typeProperties": {
+            "url": "[parameters('httpApiSourceUrl')]",
+            "enableServerCertificateValidation": true,
+            "authenticationType": "Basic",
+            "userName": {
+                "type": "AzureKeyVaultSecret",
+                "store": {
+                    "referenceName": "kv_edl",
+                    "type": "LinkedServiceReference"
+                },
+                "secretName": "http-api-source-username"
+            },
+            "password": {
+                "type": "AzureKeyVaultSecret",
+                "store": {
+                    "referenceName": "kv_edl",
+                    "type": "LinkedServiceReference"
+                },
+                "secretName": "http-api-source-password"
+            }
+        },
+        "annotations": []
+    }
+}

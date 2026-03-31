@@ -1,0 +1,9 @@
+{
+    "name": "ir_self_hosted",
+    "type": "Microsoft.DataFactory/factories/integrationRuntimes",
+    "properties": {
+        "type": "SelfHosted",
+        "description": "Self-hosted integration runtime for on-premises data access",
+        "typeProperties": {}
+    }
+}

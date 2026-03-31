@@ -1,0 +1,38 @@
+{
+    "name": "ds_adls_landing_csv",
+    "type": "Microsoft.DataFactory/factories/datasets",
+    "properties": {
+        "linkedServiceName": {
+            "referenceName": "adls_landing",
+            "type": "LinkedServiceReference"
+        },
+        "parameters": {
+            "folder_path": {
+                "type": "string"
+            },
+            "container_name": {
+                "type": "string",
+                "defaultValue": "landing"
+            }
+        },
+        "type": "DelimitedText",
+        "typeProperties": {
+            "location": {
+                "type": "AzureBlobFSLocation",
+                "folderPath": {
+                    "value": "@dataset().folder_path",
+                    "type": "Expression"
+                },
+                "fileSystem": {
+                    "value": "@dataset().container_name",
+                    "type": "Expression"
+                }
+            },
+            "columnDelimiter": ",",
+            "escapeChar": "\\",
+            "firstRowAsHeader": true,
+            "quoteChar": "\""
+        },
+        "annotations": []
+    }
+}

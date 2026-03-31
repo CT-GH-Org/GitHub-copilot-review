@@ -1,0 +1,285 @@
+{
+    "name": "pl_source_get_execution",
+    "properties": {
+        "description": "Child pipeline that retrieves execution priorities for the given source and iterates over each priority to invoke the data processing pipeline. Uses Switch to branch on load type.",
+        "activities": [
+            {
+                "name": "Lookup Execution Priorities",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": {
+                            "value": "SELECT execution_priority, entity_group, is_active, load_type FROM [control].[execution_config] WHERE source_name = '@{pipeline().parameters.source_name}' AND is_active = 1 ORDER BY execution_priority",
+                            "type": "Expression"
+                        },
+                        "queryTimeout": "0.00:05:00"
+                    },
+                    "dataset": {
+                        "referenceName": "ds_azure_sql",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "schema_name": "control",
+                            "table_name": "execution_config"
+                        }
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "ForEach Execution Priority",
+                "type": "ForEach",
+                "dependsOn": [
+                    {
+                        "activity": "Lookup Execution Priorities",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "isSequential": false,
+                    "batchCount": 10,
+                    "items": {
+                        "value": "@activity('Lookup Execution Priorities').output.value",
+                        "type": "Expression"
+                    },
+                    "activities": [
+                        {
+                            "name": "Switch Load Type",
+                            "type": "Switch",
+                            "dependsOn": [],
+                            "typeProperties": {
+                                "on": {
+                                    "value": "@item().load_type",
+                                    "type": "Expression"
+                                },
+                                "cases": [
+                                    {
+                                        "value": "full",
+                                        "activities": [
+                                            {
+                                                "name": "Execute Full Load",
+                                                "type": "ExecutePipeline",
+                                                "dependsOn": [],
+                                                "policy": {
+                                                    "secureInput": false
+                                                },
+                                                "typeProperties": {
+                                                    "pipeline": {
+                                                        "referenceName": "pl_source_to_landing_full",
+                                                        "type": "PipelineReference"
+                                                    },
+                                                    "waitOnCompletion": true,
+                                                    "parameters": {
+                                                        "source_name": {
+                                                            "value": "@pipeline().parameters.source_name",
+                                                            "type": "Expression"
+                                                        },
+                                                        "entity_name": {
+                                                            "value": "@item().entity_group",
+                                                            "type": "Expression"
+                                                        },
+                                                        "adf_master_pipeline_name": {
+                                                            "value": "@pipeline().parameters.adf_master_pipeline_name",
+                                                            "type": "Expression"
+                                                        },
+                                                        "adf_master_pipeline_run_id": {
+                                                            "value": "@pipeline().parameters.adf_master_pipeline_run_id",
+                                                            "type": "Expression"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "value": "incremental",
+                                        "activities": [
+                                            {
+                                                "name": "Execute Incremental Load",
+                                                "type": "ExecutePipeline",
+                                                "dependsOn": [],
+                                                "policy": {
+                                                    "secureInput": false
+                                                },
+                                                "typeProperties": {
+                                                    "pipeline": {
+                                                        "referenceName": "pl_source_to_landing_incr",
+                                                        "type": "PipelineReference"
+                                                    },
+                                                    "waitOnCompletion": true,
+                                                    "parameters": {
+                                                        "source_name": {
+                                                            "value": "@pipeline().parameters.source_name",
+                                                            "type": "Expression"
+                                                        },
+                                                        "entity_name": {
+                                                            "value": "@item().entity_group",
+                                                            "type": "Expression"
+                                                        },
+                                                        "adf_master_pipeline_name": {
+                                                            "value": "@pipeline().parameters.adf_master_pipeline_name",
+                                                            "type": "Expression"
+                                                        },
+                                                        "adf_master_pipeline_run_id": {
+                                                            "value": "@pipeline().parameters.adf_master_pipeline_run_id",
+                                                            "type": "Expression"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ],
+                                "defaultActivities": [
+                                    {
+                                        "name": "Log Unknown Load Type",
+                                        "type": "WebActivity",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "timeout": "0.00:05:00",
+                                            "retry": 3,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "typeProperties": {
+                                            "url": {
+                                                "value": "@pipeline().globalParameters.notification_url",
+                                                "type": "Expression"
+                                            },
+                                            "method": "POST",
+                                            "headers": {
+                                                "Content-Type": "application/json"
+                                            },
+                                            "body": {
+                                                "to": {
+                                                    "value": "@pipeline().parameters.notification_email",
+                                                    "type": "Expression"
+                                                },
+                                                "subject": {
+                                                    "value": "Unknown Load Type - @{item().entity_group}",
+                                                    "type": "Expression"
+                                                },
+                                                "body": {
+                                                    "value": "Unknown load_type '@{item().load_type}' encountered for entity_group '@{item().entity_group}' in source '@{pipeline().parameters.source_name}'.",
+                                                    "type": "Expression"
+                                                }
+                                            },
+                                            "authentication": {
+                                                "type": "MSI",
+                                                "resource": "https://management.azure.com/"
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "Notify Lookup Failure",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "Lookup Execution Priorities",
+                        "dependencyConditions": [
+                            "Failed"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:05:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "url": {
+                        "value": "@pipeline().globalParameters.notification_url",
+                        "type": "Expression"
+                    },
+                    "method": "POST",
+                    "headers": {
+                        "Content-Type": "application/json"
+                    },
+                    "body": {
+                        "to": {
+                            "value": "@pipeline().parameters.notification_email",
+                            "type": "Expression"
+                        },
+                        "subject": {
+                            "value": "Lookup Execution Priorities Failed - @{pipeline().parameters.source_name}",
+                            "type": "Expression"
+                        },
+                        "body": {
+                            "value": "Lookup Execution Priorities failed for source '@{pipeline().parameters.source_name}'. Pipeline: @{pipeline().Pipeline}. Run ID: @{pipeline().RunId}. Error: @{activity('Lookup Execution Priorities').error.message}",
+                            "type": "Expression"
+                        }
+                    },
+                    "authentication": {
+                        "type": "MSI",
+                        "resource": "https://management.azure.com/"
+                    }
+                }
+            },
+            {
+                "name": "Set Execution Failed Flag",
+                "type": "SetVariable",
+                "dependsOn": [
+                    {
+                        "activity": "ForEach Execution Priority",
+                        "dependencyConditions": [
+                            "Failed"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "variableName": "execution_failed",
+                    "value": true
+                }
+            }
+        ],
+        "parameters": {
+            "source_name": {
+                "type": "string"
+            },
+            "adf_master_pipeline_run_id": {
+                "type": "string"
+            },
+            "adf_master_pipeline_name": {
+                "type": "string"
+            },
+            "notification_email": {
+                "type": "string",
+                "defaultValue": "data-ops@contoso.com"
+            }
+        },
+        "variables": {
+            "execution_failed": {
+                "type": "Boolean",
+                "defaultValue": false
+            }
+        },
+        "annotations": [
+            "child",
+            "execution",
+            "erp_sales"
+        ],
+        "folder": {
+            "name": "ingestion/erp_sales"
+        }
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}

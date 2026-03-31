@@ -1,0 +1,22 @@
+{
+    "name": "ir_azure",
+    "type": "Microsoft.DataFactory/factories/integrationRuntimes",
+    "properties": {
+        "type": "Managed",
+        "description": "Azure managed integration runtime with VNet integration",
+        "typeProperties": {
+            "computeProperties": {
+                "location": "Canada Central",
+                "dataFlowProperties": {
+                    "computeType": "General",
+                    "coreCount": 8,
+                    "timeToLive": 10
+                }
+            },
+            "managedVirtualNetwork": {
+                "type": "ManagedVirtualNetworkReference",
+                "referenceName": "default"
+            }
+        }
+    }
+}

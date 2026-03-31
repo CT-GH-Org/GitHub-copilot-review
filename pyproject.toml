@@ -1,0 +1,133 @@
+[project]
+name = "code-review-agents"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "sqlfluff>=4.0",
+]
+
+[dependency-groups]
+dev = ["ruff>=0.8.0"]
+
+# =============================================================================
+# Ruff Configuration
+# Covers: Python Coding Standards (PEP 8, naming, type hints, docstrings)
+# =============================================================================
+
+[tool.ruff]
+line-length = 120
+indent-width = 4
+target-version = "py311"
+exclude = [
+    ".venv/",
+]
+
+# ---------------------------------------------------------------------------
+# Import Organisation (isort rules)
+# Order: stdlib -> third-party -> local
+# ---------------------------------------------------------------------------
+[tool.ruff.lint.isort]
+known-third-party = ["pyspark", "pandas", "delta"]
+known-first-party = ["utilities", "config"]
+force-sort-within-sections = true
+lines-after-imports = 2
+
+# ---------------------------------------------------------------------------
+# Enabled rule sets
+# ---------------------------------------------------------------------------
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # Pyflakes - unused imports/variables
+    "I",    # isort - import ordering
+    "N",    # pep8-naming - naming conventions
+    "B",    # flake8-bugbear - common bug patterns
+    "ANN",  # flake8-annotations - type hint enforcement
+    "D",    # flake8-docstrings - Google-style docstrings
+    "SIM",  # flake8-simplify - code simplification
+    "G",    # flake8-logging-format - structured logging
+    "UP",   # Refurb / upgrade patterns
+    "RET",  # flake8-return
+    "S",    # flake8-bandit - no hardcoded secrets
+    "RUF",  # Ruff-specific rules
+]
+ignore = [
+    # Databricks notebook patterns
+    "F403",    # wildcard imports (from pyspark.sql.functions import *)
+    "F405",    # may be undefined from wildcard import
+    "E402",    # module-level import not at top (notebook cells)
+    "F821",    # undefined name (Databricks injected globals: spark, dbutils, display)
+    # pep8-naming exceptions for Databricks/PySpark conventions
+    "N812",    # lowercase imported as non-lowercase (import pyspark.sql.functions as F)
+    "N999",    # invalid module name (notebook files like DCBQ10010.py are uppercase)
+    # Docstring relaxations for data engineering
+    "D105",    # missing docstring in magic method
+    "D107",    # missing docstring in __init__
+    "D400",    # first line should end with period
+    # Type annotation relaxations
+    "ANN204",  # missing return type annotation for __init__
+]
+
+# ---------------------------------------------------------------------------
+# Naming Conventions
+# Classes -> PascalCase, Functions -> snake_case, Variables -> snake_case
+# Constants -> UPPER_SNAKE_CASE, Booleans -> is_/has_/can_/should_ prefix
+# ---------------------------------------------------------------------------
+[tool.ruff.lint.pep8-naming]
+classmethod-decorators = ["classmethod"]
+
+# ---------------------------------------------------------------------------
+# Type Hints
+# ---------------------------------------------------------------------------
+[tool.ruff.lint.flake8-annotations]
+allow-star-arg-any = true
+suppress-none-returning = false
+
+# ---------------------------------------------------------------------------
+# Function Documentation (Google-style docstrings)
+# ---------------------------------------------------------------------------
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+# ---------------------------------------------------------------------------
+# Error Handling (bugbear extensions)
+# ---------------------------------------------------------------------------
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
+
+# ---------------------------------------------------------------------------
+# Complexity
+# ---------------------------------------------------------------------------
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+# ---------------------------------------------------------------------------
+# Per-file ignores for Databricks notebook patterns
+# ---------------------------------------------------------------------------
+[tool.ruff.lint.per-file-ignores]
+"temp/**/*.py" = [
+    "B018",    # useless-expression (notebook markdown cells)
+    "F841",    # unused variable (intermediate notebook cell results)
+    "E501",    # line too long (SQL strings)
+    "N806",    # variable in function should be lowercase (UPPERCASE_DF patterns)
+    "D100",    # missing docstring in public module (notebooks)
+    "D103",    # missing docstring in public function (notebooks)
+    "ANN001",  # missing type annotation for function argument (notebooks)
+    "ANN201",  # missing return type annotation (notebooks)
+    "S608",    # possible SQL injection (spark.sql(f"...") is standard Databricks pattern)
+    "E402",    # module-level import not at top (notebook cells)
+    "F403",    # wildcard imports
+    "F405",    # may be undefined from wildcard import
+    "F821",    # undefined name (Databricks injected globals)
+]
+
+# ---------------------------------------------------------------------------
+# Formatter: 4 spaces, no tabs
+# ---------------------------------------------------------------------------
+[tool.ruff.format]
+indent-style = "space"
+quote-style = "double"
+line-ending = "auto"
+skip-magic-trailing-comma = false
+docstring-code-format = false
