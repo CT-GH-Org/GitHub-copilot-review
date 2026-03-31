@@ -1,0 +1,378 @@
+{
+    "name": "pl_source_to_landing_full",
+    "properties": {
+        "description": "Full load pipeline: copies all data from source to landing zone, validates record count, updates watermark, and logs audit.",
+        "activities": [
+            {
+                "name": "Get Secret From Key Vault",
+                "type": "WebActivity",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:05:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": true,
+                    "secureInput": true
+                },
+                "typeProperties": {
+                    "url": {
+                        "value": "@concat(pipeline().parameters.key_vault_base_url, 'secrets/', pipeline().parameters.secret_name, '?api-version=7.0')",
+                        "type": "Expression"
+                    },
+                    "method": "GET",
+                    "authentication": {
+                        "type": "MSI",
+                        "resource": "https://vault.azure.net"
+                    }
+                }
+            },
+            {
+                "name": "Lookup Entity Config",
+                "type": "Lookup",
+                "dependsOn": [
+                    {
+                        "activity": "Get Secret From Key Vault",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 60,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": {
+                            "value": "SELECT source_name, entity_name, source_schema_name, source_entity_name, landing_partition_column, watermark_column, watermark_column_format, load_type, is_initial_load_required FROM [control].[metadata_config] WHERE source_name = '@{pipeline().parameters.source_name}' AND entity_name = '@{pipeline().parameters.entity_name}' AND is_active = 1",
+                            "type": "Expression"
+                        },
+                        "queryTimeout": "0.00:05:00"
+                    },
+                    "dataset": {
+                        "referenceName": "ds_azure_sql",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "schema_name": "control",
+                            "table_name": "metadata_config"
+                        }
+                    },
+                    "firstRowOnly": true
+                }
+            },
+            {
+                "name": "Copy Full Data",
+                "type": "Copy",
+                "dependsOn": [
+                    {
+                        "activity": "Lookup Entity Config",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.04:00:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 120,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": {
+                            "value": "SELECT * FROM [@{activity('Lookup Entity Config').output.firstRow.source_schema_name}].[@{activity('Lookup Entity Config').output.firstRow.source_entity_name}]",
+                            "type": "Expression"
+                        },
+                        "queryTimeout": "0.02:00:00"
+                    },
+                    "sink": {
+                        "type": "ParquetSink",
+                        "storeSettings": {
+                            "type": "AzureBlobFSWriteSettings"
+                        },
+                        "formatSettings": {
+                            "type": "ParquetWriteSettings"
+                        }
+                    },
+                    "enableStaging": false,
+                    "parallelCopies": 4
+                },
+                "inputs": [
+                    {
+                        "referenceName": "ds_source_sql_table",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "schema_name": {
+                                "value": "@activity('Lookup Entity Config').output.firstRow.source_schema_name",
+                                "type": "Expression"
+                            },
+                            "table_name": {
+                                "value": "@activity('Lookup Entity Config').output.firstRow.source_entity_name",
+                                "type": "Expression"
+                            }
+                        }
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "ds_adls_landing_parquet",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "container_name": "landing",
+                            "folder_path": {
+                                "value": "@concat(pipeline().parameters.source_name, '/', pipeline().parameters.entity_name, '/full/', formatDateTime(pipeline().TriggerTime, 'yyyy/MM/dd'))",
+                                "type": "Expression"
+                            },
+                            "file_name": {
+                                "value": "@concat(pipeline().parameters.entity_name, '_full_', formatDateTime(utcNow(), 'yyyyMMddHHmmss'), '.parquet')",
+                                "type": "Expression"
+                            }
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "Check Zero Records Full",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "Copy Full Data",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@equals(activity('Copy Full Data').output.rowsCopied, 0)",
+                        "type": "Expression"
+                    },
+                    "ifTrueActivities": [
+                        {
+                            "name": "Fail Zero Records",
+                            "type": "Fail",
+                            "dependsOn": [],
+                            "typeProperties": {
+                                "message": {
+                                    "value": "Full load returned zero records for entity @{pipeline().parameters.entity_name}. This is unexpected for a full load and indicates a source issue.",
+                                    "type": "Expression"
+                                },
+                                "errorCode": "ZERO_RECORDS_FULL_LOAD"
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "Update Watermark Full",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "Check Zero Records Full",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:05:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[control].[usp_update_watermark]",
+                    "storedProcedureParameters": {
+                        "source_name": {
+                            "value": {
+                                "value": "@pipeline().parameters.source_name",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "entity_name": {
+                            "value": {
+                                "value": "@pipeline().parameters.entity_name",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "rows_copied": {
+                            "value": {
+                                "value": "@activity('Copy Full Data').output.rowsCopied",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        }
+                    }
+                },
+                "linkedServiceName": {
+                    "referenceName": "sql_metadata_db",
+                    "type": "LinkedServiceReference"
+                }
+            },
+            {
+                "name": "Log Audit Full Load",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "Update Watermark Full",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:05:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[control].[usp_log_pipeline_audit]",
+                    "storedProcedureParameters": {
+                        "pipeline_name": {
+                            "value": {
+                                "value": "@pipeline().Pipeline",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "pipeline_run_id": {
+                            "value": {
+                                "value": "@pipeline().RunId",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "source_name": {
+                            "value": {
+                                "value": "@pipeline().parameters.source_name",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "target_entity": {
+                            "value": "landing",
+                            "type": "String"
+                        },
+                        "write_mode": {
+                            "value": {
+                                "value": "@if(or(equals(pipeline().parameters.load_type, 'FULL'), equals(pipeline().parameters.is_initial_load_required, true)), 'overwrite', 'append')",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "rows_copied": {
+                            "value": {
+                                "value": "@activity('Copy Full Data').output.rowsCopied",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "status": {
+                            "value": "Success",
+                            "type": "String"
+                        }
+                    }
+                },
+                "linkedServiceName": {
+                    "referenceName": "sql_metadata_db",
+                    "type": "LinkedServiceReference"
+                }
+            },
+            {
+                "name": "Send Failure Email",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "Copy Full Data",
+                        "dependencyConditions": [
+                            "Failed"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:05:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "url": {
+                        "value": "@pipeline().globalParameters.notification_url",
+                        "type": "Expression"
+                    },
+                    "method": "POST",
+                    "headers": {
+                        "Content-Type": "application/json"
+                    },
+                    "body": {
+                        "to": {
+                            "value": "@pipeline().parameters.notification_email",
+                            "type": "Expression"
+                        },
+                        "subject": {
+                            "value": "Full Load Failed - @{pipeline().parameters.entity_name}",
+                            "type": "Expression"
+                        },
+                        "body": {
+                            "value": "Full load pipeline failed for @{pipeline().parameters.source_name}/@{pipeline().parameters.entity_name}. Error: @{activity('Copy Full Data').error.message}",
+                            "type": "Expression"
+                        }
+                    },
+                    "authentication": {
+                        "type": "MSI",
+                        "resource": "https://management.azure.com/"
+                    }
+                }
+            }
+        ],
+        "parameters": {
+            "source_name": {
+                "type": "string"
+            },
+            "entity_name": {
+                "type": "string"
+            },
+            "key_vault_base_url": {
+                "type": "string",
+                "defaultValue": ""
+            },
+            "secret_name": {
+                "type": "string",
+                "defaultValue": "source-connection-string"
+            },
+            "notification_email": {
+                "type": "string",
+                "defaultValue": "data-ops@contoso.com"
+            },
+            "load_type": {
+                "type": "string",
+                "defaultValue": ""
+            },
+            "is_initial_load_required": {
+                "type": "bool",
+                "defaultValue": false
+            }
+        },
+        "annotations": [
+            "full_load",
+            "landing",
+            "erp_sales"
+        ],
+        "folder": {
+            "name": "ingestion/erp_sales"
+        }
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}

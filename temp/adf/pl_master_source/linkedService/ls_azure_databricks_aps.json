@@ -1,0 +1,22 @@
+{
+    "name": "databricks_edl_aps",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "AzureDatabricks",
+        "typeProperties": {
+            "domain": "[parameters('databricksDomain')]",
+            "credential": {
+                "referenceName": "cred_managed_identity",
+                "type": "CredentialReference"
+            },
+            "workspaceResourceId": "[parameters('databricksWorkspaceResourceId')]",
+            "newClusterNodeType": "Standard_DS3_v2",
+            "newClusterNumOfWorker": "1:4",
+            "newClusterSparkEnvVars": {
+                "PYSPARK_PYTHON": "/databricks/python3/bin/python3"
+            },
+            "newClusterVersion": "17.3.x-scala2.12"
+        },
+        "annotations": []
+    }
+}

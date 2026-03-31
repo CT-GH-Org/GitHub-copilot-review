@@ -1,0 +1,42 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "factoryName": {
+            "value": "adf-contoso-dev-001"
+        },
+        "ls_azure_sql_db_connectionString": {
+            "reference": {
+                "keyVault": {
+                    "id": "/subscriptions/00000000-1111-2222-3333-444444444444/resourceGroups/rg-contoso-dev/providers/Microsoft.KeyVault/vaults/kv-contoso-dev-001"
+                },
+                "secretName": "sql-connection-string"
+            }
+        },
+        "ls_adls_landing_url": {
+            "value": "https://adlscontosodev001.dfs.core.windows.net"
+        },
+        "ls_key_vault_baseUrl": {
+            "value": "https://kv-contoso-dev-001.vault.azure.net/"
+        },
+        "sqlAdminPassword": {
+            "reference": {
+                "keyVault": {
+                    "id": "/subscriptions/00000000-1111-2222-3333-444444444444/resourceGroups/rg-contoso-dev/providers/Microsoft.KeyVault/vaults/kv-contoso-dev-001"
+                },
+                "secretName": "sql-admin-password"
+            }
+        },
+        "apiClientSecret": {
+            "reference": {
+                "keyVault": {
+                    "id": "/subscriptions/00000000-1111-2222-3333-444444444444/resourceGroups/rg-contoso-dev/providers/Microsoft.KeyVault/vaults/kv-contoso-dev-001"
+                },
+                "secretName": "api-client-secret"
+            }
+        },
+        "notification_email": {
+            "value": "dev-team@contoso.com"
+        }
+    }
+}

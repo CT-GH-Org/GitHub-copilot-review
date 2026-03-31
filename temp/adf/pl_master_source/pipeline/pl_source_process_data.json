@@ -1,0 +1,521 @@
+{
+    "name": "pl_source_process_data",
+    "properties": {
+        "description": "Child pipeline that looks up entities for a given priority, runs Databricks notebooks for each entity, updates watermarks on success, and sends failure notifications.",
+        "activities": [
+            {
+                "name": "Get Metadata Landing Check",
+                "type": "GetMetadata",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "dataset": {
+                        "referenceName": "ds_adls_landing_parquet",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "container_name": "landing",
+                            "folder_path": {
+                                "value": "@concat('erp_sales/', pipeline().parameters.source_name)",
+                                "type": "Expression"
+                            },
+                            "file_name": "*"
+                        }
+                    },
+                    "fieldList": [
+                        "childItems",
+                        "exists",
+                        "lastModified"
+                    ],
+                    "storeSettings": {
+                        "type": "AzureBlobFSReadSettings",
+                        "recursive": true
+                    }
+                }
+            },
+            {
+                "name": "Lookup Entities By Priority",
+                "type": "Lookup",
+                "dependsOn": [
+                    {
+                        "activity": "Get Metadata Landing Check",
+                        "dependencyConditions": [
+                            "Completed"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": {
+                            "value": "SELECT entity_name, databricks_notebook_path, watermark_column, watermark_value, where_clause FROM [control].[entity_config] WHERE source_name = '@{pipeline().parameters.source_name}' AND execution_priority = @{pipeline().parameters.execution_priority} AND is_active = 1",
+                            "type": "Expression"
+                        },
+                        "queryTimeout": "0.00:05:00"
+                    },
+                    "dataset": {
+                        "referenceName": "ds_azure_sql",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "schema_name": "control",
+                            "table_name": "entity_config"
+                        }
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "ForEach Entity",
+                "type": "ForEach",
+                "dependsOn": [
+                    {
+                        "activity": "Lookup Entities By Priority",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "isSequential": false,
+                    "batchCount": 4,
+                    "items": {
+                        "value": "@activity('Lookup Entities By Priority').output.value",
+                        "type": "Expression"
+                    },
+                    "activities": [
+                        {
+                            "name": "Check Source Where Clause",
+                            "type": "IfCondition",
+                            "dependsOn": [],
+                            "typeProperties": {
+                                "expression": {
+                                    "value": "@not(or(equals(item().where_clause, ''), equals(item().where_clause, null)))",
+                                    "type": "Expression"
+                                },
+                                "ifTrueActivities": [
+                                    {
+                                        "name": "Set Where Clause",
+                                        "type": "SetVariable",
+                                        "dependsOn": [],
+                                        "typeProperties": {
+                                            "variableName": "active_where_clause",
+                                            "value": {
+                                                "value": "@item().where_clause",
+                                                "type": "Expression"
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "name": "Copy Source Data",
+                            "type": "Copy",
+                            "dependsOn": [
+                                {
+                                    "activity": "Check Source Where Clause",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.04:00:00",
+                                "retry": 3,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "typeProperties": {
+                                "source": {
+                                    "type": "AzureSqlSource",
+                                    "sqlReaderQuery": {
+                                        "value": "SELECT * FROM [dbo].[@{item().entity_name}] WHERE 1=1 @{if(not(equals(item().where_clause, null)), concat(' AND ', item().where_clause), '')}",
+                                        "type": "Expression"
+                                    },
+                                    "queryTimeout": "0.02:00:00",
+                                    "partitionOption": {
+                                        "value": "@item().watermark_column",
+                                        "type": "Expression"
+                                    }
+                                },
+                                "sink": {
+                                    "type": "ParquetSink",
+                                    "storeSettings": {
+                                        "type": "AzureBlobFSWriteSettings"
+                                    },
+                                    "formatSettings": {
+                                        "type": "ParquetWriteSettings"
+                                    }
+                                },
+                                "enableStaging": false
+                            },
+                            "inputs": [
+                                {
+                                    "referenceName": "ds_source_sql_table",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "schema_name": "dbo",
+                                        "table_name": {
+                                            "value": "@item().entity_name",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                }
+                            ],
+                            "outputs": [
+                                {
+                                    "referenceName": "ds_adls_landing_parquet",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "container_name": "landing",
+                                        "folder_path": {
+                                            "value": "@concat('erp_sales/', item().entity_name, '/', formatDateTime(utcNow(), 'yyyy/MM/dd'))",
+                                            "type": "Expression"
+                                        },
+                                        "file_name": {
+                                            "value": "@concat(item().entity_name, '_', formatDateTime(utcNow(), 'yyyyMMddHHmmss'), '.parquet')",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Run Databricks Notebook",
+                            "type": "DatabricksNotebook",
+                            "dependsOn": [
+                                {
+                                    "activity": "Copy Source Data",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.02:00:00",
+                                "retry": 3,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "typeProperties": {
+                                "notebookPath": {
+                                    "value": "@item().databricks_notebook_path",
+                                    "type": "Expression"
+                                },
+                                "baseParameters": {
+                                    "source_name": {
+                                        "value": "@pipeline().parameters.source_name",
+                                        "type": "Expression"
+                                    },
+                                    "entity_name": {
+                                        "value": "@item().entity_name",
+                                        "type": "Expression"
+                                    },
+                                    "watermark_value": {
+                                        "value": "@item().watermark_value",
+                                        "type": "Expression"
+                                    }
+                                }
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "databricks_edl",
+                                "type": "LinkedServiceReference"
+                            }
+                        },
+                        {
+                            "name": "Update Watermark",
+                            "type": "SqlServerStoredProcedure",
+                            "dependsOn": [
+                                {
+                                    "activity": "Run Databricks Notebook",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 3,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "typeProperties": {
+                                "storedProcedureName": "[control].[usp_update_watermark]",
+                                "storedProcedureParameters": {
+                                    "source_name": {
+                                        "value": {
+                                            "value": "@pipeline().parameters.source_name",
+                                            "type": "Expression"
+                                        },
+                                        "type": "String"
+                                    },
+                                    "entity_name": {
+                                        "value": {
+                                            "value": "@item().entity_name",
+                                            "type": "Expression"
+                                        },
+                                        "type": "String"
+                                    }
+                                }
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "sql_metadata_db",
+                                "type": "LinkedServiceReference"
+                            }
+                        },
+                        {
+                            "name": "Log Audit Success",
+                            "type": "WebActivity",
+                            "dependsOn": [
+                                {
+                                    "activity": "Update Watermark",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 3,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "typeProperties": {
+                                "url": {
+                                    "value": "@pipeline().globalParameters.notification_url",
+                                    "type": "Expression"
+                                },
+                                "method": "POST",
+                                "headers": {
+                                    "Content-Type": "application/json"
+                                },
+                                "body": {
+                                    "pipeline_name": {
+                                        "value": "@pipeline().Pipeline",
+                                        "type": "Expression"
+                                    },
+                                    "activity_name": "Run Databricks Notebook",
+                                    "entity_name": {
+                                        "value": "@item().entity_name",
+                                        "type": "Expression"
+                                    },
+                                    "status": "Success",
+                                    "timestamp": {
+                                        "value": "@pipeline().TriggerTime",
+                                        "type": "Expression"
+                                    },
+                                    "rows_processed": {
+                                        "value": "@activity('Copy Source Data').output.rowsCopied",
+                                        "type": "Expression"
+                                    }
+                                },
+                                "authentication": {
+                                    "type": "MSI",
+                                    "resource": "https://management.azure.com/"
+                                }
+                            }
+                        },
+                        {
+                            "name": "Log Audit Failure",
+                            "type": "WebActivity",
+                            "dependsOn": [
+                                {
+                                    "activity": "Run Databricks Notebook",
+                                    "dependencyConditions": [
+                                        "Failed"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 3,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "typeProperties": {
+                                "url": {
+                                    "value": "@pipeline().globalParameters.notification_url",
+                                    "type": "Expression"
+                                },
+                                "method": "POST",
+                                "headers": {
+                                    "Content-Type": "application/json"
+                                },
+                                "body": {
+                                    "pipeline_name": {
+                                        "value": "@pipeline().Pipeline",
+                                        "type": "Expression"
+                                    },
+                                    "activity_name": "Run Databricks Notebook",
+                                    "entity_name": {
+                                        "value": "@item().entity_name",
+                                        "type": "Expression"
+                                    },
+                                    "status": "Failed",
+                                    "timestamp": {
+                                        "value": "@pipeline().TriggerTime",
+                                        "type": "Expression"
+                                    },
+                                    "error_message": {
+                                        "value": "@activity('Run Databricks Notebook').error.message",
+                                        "type": "Expression"
+                                    }
+                                },
+                                "authentication": {
+                                    "type": "MSI",
+                                    "resource": "https://management.azure.com/"
+                                }
+                            }
+                        },
+                        {
+                            "name": "Send Failure Notification",
+                            "type": "WebActivity",
+                            "dependsOn": [
+                                {
+                                    "activity": "Run Databricks Notebook",
+                                    "dependencyConditions": [
+                                        "Failed"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 3,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "typeProperties": {
+                                "url": {
+                                    "value": "@pipeline().globalParameters.notification_url",
+                                    "type": "Expression"
+                                },
+                                "method": "POST",
+                                "headers": {
+                                    "Content-Type": "application/json"
+                                },
+                                "body": {
+                                    "to": {
+                                        "value": "@pipeline().parameters.notification_email",
+                                        "type": "Expression"
+                                    },
+                                    "subject": {
+                                        "value": "Notebook Failed - @{item().entity_name}",
+                                        "type": "Expression"
+                                    },
+                                    "body": {
+                                        "value": "Databricks notebook failed for entity @{item().entity_name} in source @{pipeline().parameters.source_name}. Error: @{activity('Run Databricks Notebook').error.message}",
+                                        "type": "Expression"
+                                    }
+                                },
+                                "authentication": {
+                                    "type": "MSI",
+                                    "resource": "https://management.azure.com/"
+                                }
+                            }
+                        },
+                        {
+                            "name": "Send Copy Failure Notification",
+                            "type": "WebActivity",
+                            "dependsOn": [
+                                {
+                                    "activity": "Copy Source Data",
+                                    "dependencyConditions": [
+                                        "Failed"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 3,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "typeProperties": {
+                                "url": {
+                                    "value": "@pipeline().globalParameters.notification_url",
+                                    "type": "Expression"
+                                },
+                                "method": "POST",
+                                "headers": {
+                                    "Content-Type": "application/json"
+                                },
+                                "body": {
+                                    "to": {
+                                        "value": "@pipeline().parameters.notification_email",
+                                        "type": "Expression"
+                                    },
+                                    "subject": {
+                                        "value": "Copy Source Data Failed - @{item().entity_name}",
+                                        "type": "Expression"
+                                    },
+                                    "body": {
+                                        "value": "Copy Source Data failed for entity @{item().entity_name} in source @{pipeline().parameters.source_name}. Pipeline: @{pipeline().Pipeline}. Run ID: @{pipeline().RunId}. Error: @{activity('Copy Source Data').error.message}",
+                                        "type": "Expression"
+                                    }
+                                },
+                                "authentication": {
+                                    "type": "MSI",
+                                    "resource": "https://management.azure.com/"
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        ],
+        "parameters": {
+            "source_name": {
+                "type": "string"
+            },
+            "execution_priority": {
+                "type": "int"
+            },
+            "entity_group": {
+                "type": "string"
+            },
+            "notification_email": {
+                "type": "string",
+                "defaultValue": "data-ops@contoso.com"
+            },
+            "write_type": {
+                "type": "string",
+                "defaultValue": "overwrite"
+            }
+        },
+        "variables": {
+            "active_where_clause": {
+                "type": "String",
+                "defaultValue": ""
+            }
+        },
+        "annotations": [
+            "child",
+            "processing",
+            "databricks",
+            "erp_sales"
+        ],
+        "folder": {
+            "name": "ingestion/erp_sales"
+        }
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}

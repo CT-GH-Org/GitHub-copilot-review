@@ -1,0 +1,301 @@
+{
+    "name": "pl_landing_to_bronze",
+    "properties": {
+        "description": "Landing to Bronze layer pipeline: runs Databricks notebook, executes DQ check, polls for completion via Until loop, and logs audit.",
+        "activities": [
+            {
+                "name": "Run Landing To Bronze Notebook",
+                "type": "DatabricksNotebook",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.02:00:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "notebookPath": {
+                        "value": "@pipeline().parameters.notebook_path",
+                        "type": "Expression"
+                    },
+                    "baseParameters": {
+                        "source_name": {
+                            "value": "@pipeline().parameters.source_name",
+                            "type": "Expression"
+                        },
+                        "entity_name": {
+                            "value": "@pipeline().parameters.entity_name",
+                            "type": "Expression"
+                        },
+                        "load_type": {
+                            "value": "@pipeline().parameters.load_type",
+                            "type": "Expression"
+                        }
+                    }
+                },
+                "linkedServiceName": {
+                    "referenceName": "databricks_edl",
+                    "type": "LinkedServiceReference"
+                }
+            },
+            {
+                "name": "Send Notebook Failure Notification",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "Run Landing To Bronze Notebook",
+                        "dependencyConditions": [
+                            "Failed"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:05:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "url": {
+                        "value": "@pipeline().globalParameters.notification_url",
+                        "type": "Expression"
+                    },
+                    "method": "POST",
+                    "headers": {
+                        "Content-Type": "application/json"
+                    },
+                    "body": {
+                        "to": {
+                            "value": "@coalesce(pipeline().parameters.notification_email, 'data-ops@contoso.com')",
+                            "type": "Expression"
+                        },
+                        "subject": {
+                            "value": "Databricks Notebook Failed - @{pipeline().parameters.source_name}/@{pipeline().parameters.entity_name}",
+                            "type": "Expression"
+                        },
+                        "body": {
+                            "value": "Landing to Bronze notebook failed for @{pipeline().parameters.source_name}/@{pipeline().parameters.entity_name}. Pipeline: @{pipeline().Pipeline}. Run ID: @{pipeline().RunId}. Error: @{activity('Run Landing To Bronze Notebook').error.message}",
+                            "type": "Expression"
+                        }
+                    },
+                    "authentication": {
+                        "type": "MSI",
+                        "resource": "https://management.azure.com/"
+                    }
+                }
+            },
+            {
+                "name": "Execute DQ Check",
+                "type": "ExecutePipeline",
+                "dependsOn": [
+                    {
+                        "activity": "Run Landing To Bronze Notebook",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "pipeline": {
+                        "referenceName": "pl_source_dq_check",
+                        "type": "PipelineReference"
+                    },
+                    "waitOnCompletion": true,
+                    "parameters": {
+                        "source_name": {
+                            "value": "@pipeline().parameters.source_name",
+                            "type": "Expression"
+                        },
+                        "entity_name": {
+                            "value": "@pipeline().parameters.entity_name",
+                            "type": "Expression"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "Until DQ Complete",
+                "type": "Until",
+                "dependsOn": [
+                    {
+                        "activity": "Execute DQ Check",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@equals(variables('dq_status'), 'Complete')",
+                        "type": "Expression"
+                    },
+                    "timeout": "0.01:00:00",
+                    "activities": [
+                        {
+                            "name": "Wait For DQ",
+                            "type": "Wait",
+                            "dependsOn": [],
+                            "typeProperties": {
+                                "waitTimeInSeconds": 60
+                            }
+                        },
+                        {
+                            "name": "Lookup DQ Status",
+                            "type": "Lookup",
+                            "dependsOn": [
+                                {
+                                    "activity": "Wait For DQ",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 3,
+                                "retryIntervalInSeconds": 30
+                            },
+                            "typeProperties": {
+                                "source": {
+                                    "type": "AzureSqlSource",
+                                    "sqlReaderQuery": {
+                                        "value": "SELECT dq_status FROM [control].[dq_results] WHERE source_name = '@{pipeline().parameters.source_name}' AND entity_name = '@{pipeline().parameters.entity_name}' ORDER BY check_datetime DESC",
+                                        "type": "Expression"
+                                    },
+                                    "queryTimeout": "0.00:05:00"
+                                },
+                                "dataset": {
+                                    "referenceName": "ds_azure_sql",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "schema_name": "control",
+                                        "table_name": "dq_results"
+                                    }
+                                },
+                                "firstRowOnly": true
+                            }
+                        },
+                        {
+                            "name": "Set DQ Status",
+                            "type": "SetVariable",
+                            "dependsOn": [
+                                {
+                                    "activity": "Lookup DQ Status",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "typeProperties": {
+                                "variableName": "dq_status",
+                                "value": {
+                                    "value": "@activity('Lookup DQ Status').output.firstRow.dq_status",
+                                    "type": "Expression"
+                                }
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "Log Bronze Audit",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "Until DQ Complete",
+                        "dependencyConditions": [
+                            "Completed"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:05:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[control].[usp_log_pipeline_audit]",
+                    "storedProcedureParameters": {
+                        "pipeline_name": {
+                            "value": {
+                                "value": "@pipeline().Pipeline",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "pipeline_run_id": {
+                            "value": {
+                                "value": "@pipeline().RunId",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "source_name": {
+                            "value": {
+                                "value": "@pipeline().parameters.source_name",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "target_layer": {
+                            "value": "bronze",
+                            "type": "String"
+                        },
+                        "status": {
+                            "value": {
+                                "value": "@if(equals(variables('dq_status'), 'Complete'), 'Success', 'DQ_Incomplete')",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        }
+                    }
+                },
+                "linkedServiceName": {
+                    "referenceName": "sql_metadata_db",
+                    "type": "LinkedServiceReference"
+                }
+            }
+        ],
+        "parameters": {
+            "source_name": {
+                "type": "string"
+            },
+            "entity_name": {
+                "type": "string"
+            },
+            "notebook_path": {
+                "type": "string",
+                "defaultValue": ""
+            },
+            "load_type": {
+                "type": "string"
+            },
+            "notification_email": {
+                "type": "string",
+                "defaultValue": "data-ops@contoso.com"
+            }
+        },
+        "variables": {
+            "dq_status": {
+                "type": "String",
+                "defaultValue": "Pending"
+            }
+        },
+        "annotations": [
+            "bronze",
+            "landing_to_bronze",
+            "erp_sales"
+        ],
+        "folder": {
+            "name": "ingestion/erp_sales"
+        }
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}

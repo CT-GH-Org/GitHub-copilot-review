@@ -1,0 +1,297 @@
+{
+    "name": "pl_source_to_landing_incr",
+    "properties": {
+        "description": "Incremental load pipeline: copies delta data from source to landing zone using watermark-based extraction.",
+        "activities": [
+            {
+                "name": "Lookup Current Watermark",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 60,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": {
+                            "value": "SELECT watermark_column, watermark_column_format, watermark_type, watermark_last_loaded_timestamp, watermark_last_loaded_bigint, watermark_column_secondary, watermark_column_secondary_format FROM [control].[metadata_config] WHERE source_name = '@{pipeline().parameters.source_name}' AND entity_name = '@{pipeline().parameters.entity_name}' AND is_active = 1",
+                            "type": "Expression"
+                        },
+                        "queryTimeout": "0.00:05:00"
+                    },
+                    "dataset": {
+                        "referenceName": "ds_azure_sql",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "schema_name": "control",
+                            "table_name": "metadata_config"
+                        }
+                    },
+                    "firstRowOnly": true
+                }
+            },
+            {
+                "name": "Copy Incremental Data",
+                "type": "Copy",
+                "dependsOn": [
+                    {
+                        "activity": "Lookup Current Watermark",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.04:00:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 120,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": {
+                            "value": "@if(equals(activity('Lookup Current Watermark').output.firstRow.watermark_type, 'BIGINT'), concat('SELECT * FROM [dbo].[', pipeline().parameters.entity_name, '] WHERE ', activity('Lookup Current Watermark').output.firstRow.watermark_column, ' > ', string(activity('Lookup Current Watermark').output.firstRow.watermark_last_loaded_bigint)), concat('SELECT * FROM [dbo].[', pipeline().parameters.entity_name, '] WHERE ', activity('Lookup Current Watermark').output.firstRow.watermark_column, ' > ''', activity('Lookup Current Watermark').output.firstRow.watermark_last_loaded_timestamp, ''''))",
+                            "type": "Expression"
+                        },
+                        "queryTimeout": "0.02:00:00",
+                        "partitionOption": {
+                            "value": "@activity('Lookup Current Watermark').output.firstRow.watermark_column",
+                            "type": "Expression"
+                        }
+                    },
+                    "sink": {
+                        "type": "ParquetSink",
+                        "storeSettings": {
+                            "type": "AzureBlobFSWriteSettings"
+                        },
+                        "formatSettings": {
+                            "type": "ParquetWriteSettings"
+                        }
+                    },
+                    "enableStaging": false
+                },
+                "inputs": [
+                    {
+                        "referenceName": "ds_source_sql_table",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "schema_name": "dbo",
+                            "table_name": {
+                                "value": "@pipeline().parameters.entity_name",
+                                "type": "Expression"
+                            }
+                        }
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "ds_adls_landing_csv",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "folder_path": {
+                                "value": "@concat('erp_sales/', pipeline().parameters.entity_name, '/incr/', formatDateTime(utcNow(), 'yyyy/MM/dd'))",
+                                "type": "Expression"
+                            }
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "Check Zero Records Incr",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "Copy Incremental Data",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@equals(activity('Copy Incremental Data').output.rowsCopied, 0)",
+                        "type": "Expression"
+                    },
+                    "ifTrueActivities": [
+                        {
+                            "name": "Log Zero Records Info",
+                            "type": "SqlServerStoredProcedure",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 3,
+                                "retryIntervalInSeconds": 30
+                            },
+                            "typeProperties": {
+                                "storedProcedureName": "[control].[usp_log_pipeline_audit]",
+                                "storedProcedureParameters": {
+                                    "pipeline_name": {
+                                        "value": {
+                                            "value": "@pipeline().Pipeline",
+                                            "type": "Expression"
+                                        },
+                                        "type": "String"
+                                    },
+                                    "status": {
+                                        "value": "NoNewData",
+                                        "type": "String"
+                                    },
+                                    "rows_copied": {
+                                        "value": "0",
+                                        "type": "Int32"
+                                    }
+                                }
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "sql_metadata_db",
+                                "type": "LinkedServiceReference"
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "Log Audit Incr Load",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "Check Zero Records Incr",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:05:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[control].[usp_log_pipeline_audit]",
+                    "storedProcedureParameters": {
+                        "pipeline_name": {
+                            "value": {
+                                "value": "@pipeline().Pipeline",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "pipeline_run_id": {
+                            "value": {
+                                "value": "@pipeline().RunId",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "write_mode": {
+                            "value": {
+                                "value": "@if(or(equals(pipeline().parameters.load_type, 'FULL'), equals(pipeline().parameters.is_initial_load_required, true)), 'overwrite', 'append')",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "rows_copied": {
+                            "value": {
+                                "value": "@activity('Copy Incremental Data').output.rowsCopied",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "status": {
+                            "value": "Success",
+                            "type": "String"
+                        }
+                    }
+                },
+                "linkedServiceName": {
+                    "referenceName": "sql_metadata_db",
+                    "type": "LinkedServiceReference"
+                }
+            },
+            {
+                "name": "Send Failure Notification Incr",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "Copy Incremental Data",
+                        "dependencyConditions": [
+                            "Failed"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:05:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "url": {
+                        "value": "@pipeline().globalParameters.notification_url",
+                        "type": "Expression"
+                    },
+                    "method": "POST",
+                    "headers": {
+                        "Content-Type": "application/json"
+                    },
+                    "body": {
+                        "to": {
+                            "value": "@pipeline().parameters.notification_email",
+                            "type": "Expression"
+                        },
+                        "subject": {
+                            "value": "Incremental Load Failed - @{pipeline().parameters.entity_name}",
+                            "type": "Expression"
+                        },
+                        "body": {
+                            "value": "Incremental load failed for @{pipeline().parameters.source_name}/@{pipeline().parameters.entity_name}. Watermark: @{activity('Lookup Current Watermark').output.firstRow.watermark_last_loaded_timestamp}. Error: @{activity('Copy Incremental Data').error.message}",
+                            "type": "Expression"
+                        }
+                    },
+                    "authentication": {
+                        "type": "MSI",
+                        "resource": "https://management.azure.com/"
+                    }
+                }
+            }
+        ],
+        "parameters": {
+            "source_name": {
+                "type": "string"
+            },
+            "entity_name": {
+                "type": "string"
+            },
+            "notification_email": {
+                "type": "string",
+                "defaultValue": "data-ops@contoso.com"
+            },
+            "load_type": {
+                "type": "string",
+                "defaultValue": ""
+            },
+            "is_initial_load_required": {
+                "type": "bool",
+                "defaultValue": false
+            }
+        },
+        "annotations": [
+            "incremental",
+            "landing",
+            "erp_sales"
+        ],
+        "folder": {
+            "name": "ingestion/erp_sales"
+        }
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}

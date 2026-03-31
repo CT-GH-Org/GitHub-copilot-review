@@ -1,0 +1,11 @@
+{
+    "name": "kv_edl",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "AzureKeyVault",
+        "typeProperties": {
+            "baseUrl": "[parameters('keyVaultBaseUrl')]"
+        },
+        "annotations": []
+    }
+}

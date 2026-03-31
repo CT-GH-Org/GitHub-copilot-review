@@ -1,0 +1,15 @@
+{
+    "name": "adls_landing",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "AzureBlobFS",
+        "typeProperties": {
+            "url": "[parameters('adlsLandingUrl')]",
+            "credential": {
+                "referenceName": "cred_managed_identity",
+                "type": "CredentialReference"
+            }
+        },
+        "annotations": []
+    }
+}

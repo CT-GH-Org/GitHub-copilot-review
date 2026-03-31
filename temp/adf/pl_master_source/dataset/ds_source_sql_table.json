@@ -1,0 +1,30 @@
+{
+    "name": "ds_source_sql_table",
+    "type": "Microsoft.DataFactory/factories/datasets",
+    "properties": {
+        "linkedServiceName": {
+            "referenceName": "sql_metadata_db",
+            "type": "LinkedServiceReference"
+        },
+        "parameters": {
+            "schema_name": {
+                "type": "string"
+            },
+            "table_name": {
+                "type": "string"
+            }
+        },
+        "type": "AzureSqlTable",
+        "typeProperties": {
+            "schema": {
+                "value": "@dataset().schema_name",
+                "type": "Expression"
+            },
+            "table": {
+                "value": "@dataset().table_name",
+                "type": "Expression"
+            }
+        },
+        "annotations": []
+    }
+}
